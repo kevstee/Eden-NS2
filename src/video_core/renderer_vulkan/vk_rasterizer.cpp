@@ -684,8 +684,21 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
         std::ofstream registers(prefix + "-registers.bin", std::ios::binary);
         registers.write(reinterpret_cast<const char*>(&regs), sizeof(regs));
         for (size_t stream = 0; stream < 4; ++stream) {
-            if (regs.vertex_streams[stream].IsEnabled())
-                dump(fmt::format("-vertex-{}", stream), regs.vertex_streams[stream].Address(), 128);
+            if (regs.vertex_streams[stream].IsEnabled()) {
+                // On demand: the whole stream (up to 8 MiB), so mesh data can be inspected offline.
+                const GPUVAddr start = regs.vertex_streams[stream].Address();
+                const GPUVAddr limit = regs.vertex_stream_limits[stream].Address();
+                size_t length = 128;
+                if (on_demand && limit >= start) length = (std::min<u64>)(u64{limit - start} + 1, 8ULL * 1024 * 1024);
+                dump(fmt::format("-vertex-{}", stream), start, length);
+            }
+        }
+        if (on_demand && regs.index_buffer.count) {
+            const size_t index_bytes = (std::min<u64>)(u64{regs.index_buffer.count} *
+                                                       regs.index_buffer.FormatSizeInBytes(), 4ULL * 1024 * 1024);
+            dump(fmt::format("-index-first{}-format{}", regs.index_buffer.first,
+                             static_cast<u32>(regs.index_buffer.format)),
+                 regs.index_buffer.IndexStart(), index_bytes);
         }
         if (on_demand) {
             dump("-tic", regs.tex_header.Address(), (std::min)(u64{regs.tex_header.limit} + 1, u64{8192}) * 32);

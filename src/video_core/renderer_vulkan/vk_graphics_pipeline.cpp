@@ -591,6 +591,20 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                            static_cast<u32>(regs.rt[0].format), is_indexed,
                                            is_indexed ? draw.index_buffer.count : draw.vertex_buffer.count,
                                            draw.instance_count, static_cast<u32>(draw.topology), views.size());
+            {
+                // The value native-draw.request expects as its fragment shader filter: FNV-1a of the
+                // 256 bytes at the fragment program address + 0x80.
+                const auto& fs_config = regs.pipelines[5];
+                const GPUVAddr fs_address = ((GPUVAddr{fs_config.reserved[0] & 0xff} << 32) | fs_config.reserved[1]) + 0x80;
+                u64 fs_fnv{};
+                if (regs.IsShaderConfigEnabled(5) && gpu_memory->IsFullyMappedRange(fs_address, 256)) {
+                    std::array<u8, 256> bytes;
+                    gpu_memory->ReadBlockUnsafe(fs_address, bytes.data(), bytes.size());
+                    fs_fnv = 14695981039346656037ULL;
+                    for (const u8 byte : bytes) fs_fnv = (fs_fnv ^ byte) * 1099511628211ULL;
+                }
+                line += fmt::format(" fsfnv={:x}", fs_fnv);
+            }
             for (size_t i = 0; i < views.size(); ++i) {
                 if (!views[i].id || views[i].id == VideoCommon::NULL_IMAGE_VIEW_ID) {
                     line += fmt::format(" [{}:{} null]", i, views[i].index);
