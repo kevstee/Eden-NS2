@@ -241,10 +241,11 @@ void TextureCache<P>::DumpNativeSceneImages() {
     std::error_code error;
     if (!std::filesystem::remove("native-image-dump.request", error)) return;
     const u32 dump_id = sequence++;
-    static constexpr std::array<std::pair<u32, u32>, 8> sizes{{
+    static constexpr std::array<std::pair<u32, u32>, 11> sizes{{
         {3840, 2160}, {2560, 1440}, {1920, 1080}, {1280, 720}, {640, 360}, {320, 180}, {160, 90}, {896, 504},
+        {256, 256}, {128, 128}, {512, 512},
     }};
-    constexpr size_t max_images = 24;
+    constexpr size_t max_images = 64;
     constexpr size_t max_bytes_per_image = 80ULL * 1024 * 1024;
     size_t written{};
     std::ofstream index("native-image-dump-" + std::to_string(dump_id) + ".txt");
