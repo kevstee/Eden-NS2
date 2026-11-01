@@ -689,7 +689,33 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 const GPUVAddr start = regs.vertex_streams[stream].Address();
                 const GPUVAddr limit = regs.vertex_stream_limits[stream].Address();
                 size_t length = 128;
-                if (on_demand && limit >= start) length = (std::min<u64>)(u64{limit - start} + 1, 8ULL * 1024 * 1024);
+                if (on_demand && limit > start) {
+                    length = (std::min<u64>)(u64{limit - start} + 1, 8ULL * 1024 * 1024);
+                } else if (on_demand) {
+                    // No usable limit register: size the stream from the highest vertex the draw reads.
+                    const u64 stride = regs.vertex_streams[stream].stride.Value();
+                    u64 vertices{};
+                    if (regs.index_buffer.count) {
+                        const size_t index_size = regs.index_buffer.FormatSizeInBytes();
+                        const u64 index_bytes = u64{regs.index_buffer.count} * index_size;
+                        if (index_bytes <= 4ULL * 1024 * 1024 &&
+                            gpu_memory->IsFullyMappedRange(regs.index_buffer.IndexStart(), index_bytes)) {
+                            std::vector<u8> indices(index_bytes);
+                            gpu_memory->ReadBlockUnsafe(regs.index_buffer.IndexStart(), indices.data(), indices.size());
+                            u32 highest{};
+                            for (size_t i = 0; i + index_size <= indices.size(); i += index_size) {
+                                u32 value{};
+                                std::memcpy(&value, indices.data() + i, index_size);
+                                highest = (std::max)(highest, value);
+                            }
+                            vertices = u64{highest} + 1;
+                        }
+                    } else {
+                        const auto& vertex_buffer = maxwell3d->draw_manager.draw_state.vertex_buffer;
+                        vertices = u64{vertex_buffer.first} + vertex_buffer.count;
+                    }
+                    if (stride && vertices) length = (std::min<u64>)(vertices * stride, 8ULL * 1024 * 1024);
+                }
                 dump(fmt::format("-vertex-{}", stream), start, length);
             }
         }
