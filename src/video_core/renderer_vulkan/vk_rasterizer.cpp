@@ -466,6 +466,13 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     if (!pipeline) {
         // A draw withheld for an asynchronous pipeline build is not a failure of the native work.
         submitted = pipeline_cache.TakeDeferredDraw();
+        if (!submitted) {
+            static std::atomic<u32> null_pipeline_logs{};
+            if (null_pipeline_logs.fetch_add(1) < 32) {
+                LOG_ERROR(Render_Vulkan, "Draw dropped: no graphics pipeline (build failed or rejected), indexed={}",
+                          is_indexed);
+            }
+        }
         return;
     }
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
@@ -473,7 +480,13 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     try {
-        if (!pipeline->Configure(is_indexed)) return;
+        if (!pipeline->Configure(is_indexed)) {
+            static std::atomic<u32> configure_logs{};
+            if (configure_logs.fetch_add(1) < 32) {
+                LOG_ERROR(Render_Vulkan, "Draw dropped: pipeline Configure() returned false, indexed={}", is_indexed);
+            }
+            return;
+        }
     } catch (const Shader::Exception& exception) {
         LOG_ERROR(Render_Vulkan, "Graphics descriptor binding failed: {}", exception.what());
         return;
