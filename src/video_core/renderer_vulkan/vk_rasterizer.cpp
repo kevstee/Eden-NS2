@@ -20,7 +20,9 @@
 #include <fstream>
 #include <unordered_map>
 #include <vector>
+#include <map>
 #include <mutex>
+#include <tuple>
 
 #include <fmt/format.h>
 
@@ -801,6 +803,29 @@ void TraceWindowTarget(const Tegra::Engines::Maxwell3D& maxwell3d, Tegra::Memory
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
+    // Diagnostic: histogram of render target sizes/formats per draw, logged when a new combination
+    // first appears and then every 4096 draws, to show the internal resolution of the 3D scene.
+    {
+        const auto& regs = maxwell3d->regs;
+        static std::mutex stats_mutex;
+        static std::map<std::tuple<u32, u32, u32, u32>, u64> stats;
+        static u64 draws{};
+        const std::tuple<u32, u32, u32, u32> key{static_cast<u32>(regs.rt[0].width), static_cast<u32>(regs.rt[0].height),
+                                                 static_cast<u32>(regs.rt[0].format), static_cast<u32>(regs.rt_control.count.Value())};
+        std::scoped_lock lock{stats_mutex};
+        const bool is_new = stats.try_emplace(key, 0).second;
+        ++stats[key];
+        if (is_new || ++draws % 4096 == 0) {
+            LOG_INFO(HW_GPU, "draw target {}x{} fmt {:#x} count {} (new: {})", std::get<0>(key), std::get<1>(key),
+                     std::get<2>(key), std::get<3>(key), is_new);
+            if (!is_new) {
+                for (const auto& [k, n] : stats) {
+                    LOG_INFO(HW_GPU, "  draws into {}x{} fmt {:#x} count {}: {}", std::get<0>(k), std::get<1>(k),
+                             std::get<2>(k), std::get<3>(k), n);
+                }
+            }
+        }
+    }
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
                                  : maxwell3d->draw_manager.draw_state.vertex_buffer.count);
