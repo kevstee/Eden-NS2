@@ -9,6 +9,10 @@
 #include "video_core/native_diagnostics.h"
 #include "video_core/native_texture_capture.h"
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <limits>
@@ -225,8 +229,60 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     }
 }
 
+// Diagnostic readback: creating the file "native-image-dump.request" in the working directory
+// makes the next frame write every single-level 2D image of a scene-sized resolution (and a few
+// smaller pyramid levels) as linear host-format pixels, so the stages of a frame can be inspected.
+// Independent of EDEN_NATIVE_DRAW_DIAGNOSTICS, so it costs nothing while the file is absent.
+template <class P>
+void TextureCache<P>::DumpNativeSceneImages() {
+    static thread_local u32 frame_counter{};
+    static thread_local u32 sequence{};
+    if (frame_counter++ % 15 != 0) return;
+    std::error_code error;
+    if (!std::filesystem::remove("native-image-dump.request", error)) return;
+    const u32 dump_id = sequence++;
+    static constexpr std::array<std::pair<u32, u32>, 8> sizes{{
+        {3840, 2160}, {2560, 1440}, {1920, 1080}, {1280, 720}, {640, 360}, {320, 180}, {160, 90}, {896, 504},
+    }};
+    constexpr size_t max_images = 24;
+    constexpr size_t max_bytes_per_image = 80ULL * 1024 * 1024;
+    size_t written{};
+    std::ofstream index("native-image-dump-" + std::to_string(dump_id) + ".txt");
+    for (const auto [image_id, unused] : slot_images) {
+        if (written >= max_images) break;
+        Image& image = slot_images[image_id];
+        const auto& info = image.info;
+        if (info.num_samples != 1 || info.resources.levels != 1 || info.resources.layers != 1 ||
+            info.type != ImageType::e2D || !IsDownloadable(image) ||
+            True(image.flags & (ImageFlagBits::Converted | ImageFlagBits::IsDecoding)) ||
+            !image.unswizzled_size_bytes || image.unswizzled_size_bytes > max_bytes_per_image) {
+            continue;
+        }
+        bool wanted{};
+        for (const auto& [width, height] : sizes) {
+            wanted |= info.size.width == width && info.size.height == height;
+        }
+        if (!wanted) continue;
+        auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
+        const auto copies = FullDownloadCopies(info);
+        image.DownloadMemory(map, copies);
+        runtime.Finish();
+        std::ostringstream name;
+        name << "native-image-dump-" << dump_id << '-' << written << '-' << std::hex << image.gpu_addr
+             << std::dec << '-' << info.size.width << 'x' << info.size.height << "-f"
+             << static_cast<u32>(info.format) << ".linear.bin";
+        NativeTextureCapture::Write(name.str(), map.mapped_span.data(), image.unswizzled_size_bytes);
+        index << name.str() << " bytes " << image.unswizzled_size_bytes << " flags "
+              << static_cast<u32>(image.flags) << " modification_tick " << image.modification_tick << '\n';
+        ++written;
+    }
+    index << "images " << written << '\n';
+    LOG_INFO(HW_GPU, "Native image dump {}: wrote {} images", dump_id, written);
+}
+
 template <class P>
 void TextureCache<P>::TickFrame() {
+    DumpNativeSceneImages();
     // Upload buffers grown for one huge image are freed rather than kept for the session.
     for (auto* const scratch : {&swizzle_data_buffer, &unswizzle_data_buffer}) {
         if (scratch->capacity() > LargeScratchCapacity) {

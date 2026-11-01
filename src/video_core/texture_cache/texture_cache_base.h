@@ -196,6 +196,9 @@ public:
 
     bool CaptureNativeGpuTexture(std::span<const ImageViewInOut> views);
 
+    /// Diagnostic: write the large 2D colour/depth images of the scene to disk when asked.
+    void DumpNativeSceneImages();
+
     /// Handle feedback loops during draws.
     void CheckFeedbackLoop(std::span<const ImageViewInOut> views);
 
